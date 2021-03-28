@@ -8,8 +8,12 @@ use sfml::window::{Style, VideoMode};
 
 use rand::{rngs::ThreadRng, thread_rng, Rng};
 
+use core::ops::{
+    Index, IndexMut, Range, RangeFrom, RangeFull, RangeInclusive, RangeTo, RangeToInclusive,
+};
+
 struct Catpeasant {
-    memory: [u8; 4096], // guess what this is
+    memory: ChipMemory, // guess what this is
     i: u16,             // index register/address
     v: [u8; 16],        // general purose registers
     delay_timer: u8,    // delay timer register
@@ -48,7 +52,7 @@ impl Catpeasant {
     }
 
     fn read_opcode(&self) -> u16 {
-        (self.memory[self.pc as usize] as u16) << 8 | self.memory[(self.pc + 1) as usize] as u16
+        (self.memory[self.pc] as u16) << 8 | self.memory[(self.pc + 1)] as u16
     }
 
     fn decode_exec_opcode(&mut self, opcode: u16) {
@@ -190,15 +194,15 @@ impl Catpeasant {
                 0x1E => self.i += vx as u16,
                 0x29 => self.i = vx as u16,
                 0x33 => {
-                    self.memory[self.i as usize] = vx / 100;
-                    self.memory[(self.i + 1) as usize] = (vx / 10) % 10;
-                    self.memory[(self.i + 2) as usize] = vx % 10;
+                    self.memory[self.i] = vx / 100;
+                    self.memory[self.i + 1] = (vx / 10) % 10;
+                    self.memory[self.i + 2] = vx % 10;
                 }
                 // TODO: If something blows up drop the inclusive or go +1 in the right places
-                0x55 => self.memory[(self.i as usize)..=((self.i + n2) as usize)]
-                    .copy_from_slice(&self.v[0..=(n2 as usize)]),
-                0x65 => self.v[0..=(n2 as usize)]
-                    .copy_from_slice(&self.memory[(self.i as usize)..=((self.i + n2) as usize)]),
+                0x55 => self.memory[self.i..=(self.i + n2)]
+                    .copy_from_slice(&self.v[0..=n2]),
+                0x65 => self.v[0..=n2]
+                    .copy_from_slice(&self.memory[self.i..=(self.i + n2)]),
                 _ => {}
             },
             _ => {}
@@ -259,5 +263,133 @@ fn main() {
                 _ => {}
             }
         }
+    }
+}
+
+pub struct ChipMemory([u8; 4096]);
+
+impl Index<u16> for ChipMemory {
+    type Output = u8;
+    #[inline]
+    #[must_use]
+    #[track_caller]
+    fn index(&self, u: u16) -> &u8 {
+        &self.0[u as usize]
+    }
+}
+impl IndexMut<u16> for ChipMemory {
+    #[inline]
+    #[must_use]
+    #[track_caller]
+    fn index_mut(&mut self, u: u16) -> &mut u8 {
+        &mut self.0[u as usize]
+    }
+}
+
+impl Index<Range<u16>> for ChipMemory {
+    type Output = [u8];
+    #[inline]
+    #[must_use]
+    #[track_caller]
+    fn index(&self, r: Range<u16>) -> &[u8] {
+        &self.0[r.start as usize..r.end as usize]
+    }
+}
+impl IndexMut<Range<u16>> for ChipMemory {
+    #[inline]
+    #[must_use]
+    #[track_caller]
+    fn index_mut(&mut self, r: Range<u16>) -> &mut [u8] {
+        &mut self.0[r.start as usize..r.end as usize]
+    }
+}
+
+impl Index<RangeFrom<u16>> for ChipMemory {
+    type Output = [u8];
+    #[inline]
+    #[must_use]
+    #[track_caller]
+    fn index(&self, r: RangeFrom<u16>) -> &[u8] {
+        &self.0[r.start as usize..]
+    }
+}
+impl IndexMut<RangeFrom<u16>> for ChipMemory {
+    #[inline]
+    #[must_use]
+    #[track_caller]
+    fn index_mut(&mut self, r: RangeFrom<u16>) -> &mut [u8] {
+        &mut self.0[r.start as usize..]
+    }
+}
+
+impl Index<RangeFull> for ChipMemory {
+    type Output = [u8];
+    #[inline]
+    #[must_use]
+    #[track_caller]
+    fn index(&self, _: RangeFull) -> &[u8] {
+        &self.0[..]
+    }
+}
+impl IndexMut<RangeFull> for ChipMemory {
+    #[inline]
+    #[must_use]
+    #[track_caller]
+    fn index_mut(&mut self, _: RangeFull) -> &mut [u8] {
+        &mut self.0[..]
+    }
+}
+
+impl Index<RangeInclusive<u16>> for ChipMemory {
+    type Output = [u8];
+    #[inline]
+    #[must_use]
+    #[track_caller]
+    fn index(&self, r: RangeInclusive<u16>) -> &[u8] {
+        &self.0[*r.start() as usize..=*r.end() as usize]
+    }
+}
+impl IndexMut<RangeInclusive<u16>> for ChipMemory {
+    #[inline]
+    #[must_use]
+    #[track_caller]
+    fn index_mut(&mut self, r: RangeInclusive<u16>) -> &mut [u8] {
+        &mut self.0[*r.start() as usize..=*r.end() as usize]
+    }
+}
+
+impl Index<RangeTo<u16>> for ChipMemory {
+    type Output = [u8];
+    #[inline]
+    #[must_use]
+    #[track_caller]
+    fn index(&self, r: RangeTo<u16>) -> &[u8] {
+        &self.0[..r.end as usize]
+    }
+}
+impl IndexMut<RangeTo<u16>> for ChipMemory {
+    #[inline]
+    #[must_use]
+    #[track_caller]
+    fn index_mut(&mut self, r: RangeTo<u16>) -> &mut [u8] {
+        &mut self.0[..r.end as usize]
+    }
+}
+
+impl Index<RangeToInclusive<u16>> for ChipMemory {
+    type Output = [u8];
+    #[inline]
+    #[must_use]
+    #[track_caller]
+    fn index(&self, r: RangeToInclusive<u16>) -> &[u8] {
+        &self.0[..=r.end as usize]
+    }
+}
+impl IndexMut<RangeToInclusive<u16>> for ChipMemory {
+    #[inline]
+    #[must_use]
+    #[track_caller]
+    fn index_mut(&mut self, r: RangeToInclusive<u16>) -> &mut [u8] {
+        &mut self.0[..=r.end as usize]
     }
 }
