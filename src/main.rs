@@ -1,18 +1,17 @@
 // http://devernay.free.fr/hacks/chip8/C8TECH10.HTM
 // http://multigesture.net/articles/how-to-write-an-emulator-chip-8-interpreter/
 // https://chip-8.github.io/links/
-#![allow(dead_code)]
-#![allow(unused_variables)]
-use std::{fs::File, thread, time::Instant};
+use std::{env::args, fs::File, thread, time::Instant};
 use std::{io::Read, time::Duration};
 
 use rand::{rngs::ThreadRng, thread_rng, Rng};
 
+use sfml::audio::{self, SoundSource};
 use sfml::graphics::{
     Color, Drawable, RectangleShape, RenderTarget, RenderWindow, Shape, Transformable,
 };
 use sfml::system::Vector2f;
-use sfml::window::{Style, VideoMode};
+use sfml::window::{Event, Key, Style, VideoMode};
 
 const PIXEL: usize = 10;
 const D_WIDTH: usize = 64;
@@ -49,8 +48,9 @@ struct Catpeasant {
     display: [u8; 2048],
     draw: bool,
     random: ThreadRng,
-    wait_key: bool,
     freaky: Instant,
+    key_wait: bool,
+    sound: bool,
 }
 
 impl Catpeasant {
@@ -63,7 +63,7 @@ impl Catpeasant {
         self.decode_exec_opcode(opcode);
 
         // update timers
-        if self.freaky.elapsed() > Duration::from_nanos(1_000_000_000 / 60) {
+        if self.freaky.elapsed() > Duration::from_nanos(1000000000 / 60) {
             if self.delay_timer > 0 {
                 self.delay_timer -= 1;
             }
@@ -71,7 +71,7 @@ impl Catpeasant {
             if self.sound_timer > 0 {
                 self.sound_timer -= 1;
                 if self.sound_timer == 0 {
-                    // This should play a sound now; or flag one to be played?
+                    self.sound = true;
                 }
             }
 
@@ -89,8 +89,7 @@ impl Catpeasant {
     }
 
     fn decode_exec_opcode(&mut self, opcode: u16) {
-        // TODO: for funsies, explore union usage instead
-        let (toggles_bits, n2, n3, n4) = (
+        let (_toggles_bits, n2, n3, n4) = (
             (opcode & 0xf000) >> 12,
             (opcode & 0x0f00) >> 8,
             (opcode & 0x00f0) >> 4,
@@ -102,7 +101,7 @@ impl Catpeasant {
         let vy = self.v[n3 as usize];
         let kk = (opcode & 0x00ff) as u8;
 
-        println!("{:04x}", opcode);
+        // println!("{:04x}", opcode);
         match opcode {
             // Clear Screen
             0x00e0 => {
@@ -121,7 +120,7 @@ impl Catpeasant {
             }
             // Call Subroutine
             0x2000..=0x2FFF => {
-                self.sp += 1; // FIXME: make sure we aren't bigger than the stack
+                self.sp += 1; // FIXME: No fix let panic
                 self.stack[self.sp] = self.pc;
                 self.pc = address;
                 return;
@@ -199,7 +198,6 @@ impl Catpeasant {
             0xC000..=0xCFFF => self.v[n2 as usize] = self.random.gen::<u8>() & kk,
             // Display
             0xD000..=0xDFFF => {
-                // FIXME: Because you are probably a doofus
                 self.v[15] = 0;
 
                 let height = n4;
@@ -209,28 +207,32 @@ impl Catpeasant {
                     pixel = self.memory[(self.i + y) as usize];
                     for x in 0..8 {
                         if (pixel & (0x80 >> x)) != 0 {
-                            let index =
+                            let mut index =
                                 vx as usize + x as usize + ((vy as usize + y as usize) * 64);
+                            while index >= 2048 {
+                                index -= 2048;
+                            }
+
                             if self.display[index] == 1 {
                                 self.v[15] = 1;
                             }
+
                             self.display[index] ^= 1;
                         }
                     }
                 }
 
                 self.draw = true;
-                // self.pc += 2;
             }
             // Keyboard
             0xE000..=0xEFFF if kk == 0x9E || kk == 0xA1 => match kk {
                 0x9e => {
-                    if self.keyboard[n2 as usize] {
+                    if self.keyboard[self.v[n2 as usize] as usize] {
                         self.pc += 2;
                     }
                 }
                 0xa1 => {
-                    if !self.keyboard[n2 as usize] {
+                    if !self.keyboard[self.v[n2 as usize] as usize] {
                         self.pc += 2;
                     }
                 }
@@ -240,22 +242,38 @@ impl Catpeasant {
             0xF000..=0xFFFF => match kk {
                 0x07 => self.v[n2 as usize] = self.delay_timer,
                 0x0A => {
-                    // FIXME: This is bool crap code just to show it
-                    // once SFML is connected, this needs to be a blocking key_read
-                    // or a simulation of that.
-                    let key_press = 'C';
-                    self.v[n2 as usize] = key_press as u8;
+                    if !self.key_wait {
+                        self.key_wait = true;
+                        self.keyboard = [false; 16];
+                        return;
+                    }
+
+                    if self.key_wait {
+                        let mut index = 42;
+                        for (i, b) in self.keyboard.iter().enumerate() {
+                            if *b {
+                                index = i;
+                                break;
+                            }
+                        }
+                        if index != 42 {
+                            self.key_wait = false;
+                            self.v[n2 as usize] = index as u8;
+                            self.pc += 2;
+                        }
+                    }
+
+                    return;
                 }
                 0x15 => self.delay_timer = vx,
                 0x18 => self.sound_timer = vx,
                 0x1E => self.i += vx as u16,
-                0x29 => self.i = vx as u16,
+                0x29 => self.i = (vx * 5) as u16,
                 0x33 => {
                     self.memory[self.i as usize] = vx / 100;
                     self.memory[(self.i + 1) as usize] = (vx / 10) % 10;
                     self.memory[(self.i + 2) as usize] = vx % 10;
                 }
-                // TODO: If something blows up drop the inclusive or go +1 in the right places
                 0x55 => self.memory[(self.i as usize)..=((self.i + n2) as usize)]
                     .copy_from_slice(&self.v[0..=(n2 as usize)]),
                 0x65 => self.v[0..=(n2 as usize)]
@@ -273,7 +291,7 @@ impl Drawable for Catpeasant {
     fn draw<'a: 'shader, 'texture, 'shader, 'shader_texture>(
         &'a self,
         target: &mut dyn RenderTarget,
-        states: sfml::graphics::RenderStates<'texture, 'shader, 'shader_texture>,
+        _states: sfml::graphics::RenderStates<'texture, 'shader, 'shader_texture>,
     ) {
         let mut pixel = RectangleShape::new();
         pixel.set_size(Vector2f::new(PIXEL as f32, PIXEL as f32));
@@ -313,6 +331,10 @@ fn main() {
     clear(&mut togglebit);
     togglebit.display();
 
+    let snd_buf = audio::SoundBuffer::from_file("sound.wav").unwrap();
+    let mut chip_sound = audio::Sound::with_buffer(&snd_buf);
+    chip_sound.set_volume(10.0);
+
     let mut chip8 = Catpeasant {
         memory: [0; 4096],
         i: 0,
@@ -326,17 +348,24 @@ fn main() {
         display: [0; 2048],
         draw: false,
         random: thread_rng(),
-        wait_key: false,
         freaky: Instant::now(),
+        key_wait: false,
+        sound: false,
     };
 
     chip8.memory[0..FONT_SPRITES.len()].copy_from_slice(&FONT_SPRITES);
 
-    chip8.load_rom("roms/VBRIX".into());
+    let args = args().skip(1).collect::<Vec<_>>();
+    let rom_path = if !args.is_empty() {
+        args[0].clone()
+    } else {
+        "roms/MERLIN".into()
+    };
+
+    chip8.load_rom(rom_path.into());
 
     while togglebit.is_open() {
         // emulate cycle
-        // if !chip8.wait_key {
         chip8.do_cycle();
 
         // draw if ready
@@ -346,41 +375,37 @@ fn main() {
             togglebit.draw(&chip8);
             togglebit.display();
         }
-        // }
+
+        if chip8.sound {
+            chip8.sound = false;
+            chip_sound.play();
+        }
 
         // key states
+        chip8.keyboard[0x0] = Key::X.is_pressed();
+        chip8.keyboard[0x1] = Key::Num1.is_pressed();
+        chip8.keyboard[0x2] = Key::Num2.is_pressed();
+        chip8.keyboard[0x3] = Key::Num3.is_pressed();
+        chip8.keyboard[0x4] = Key::Q.is_pressed();
+        chip8.keyboard[0x5] = Key::W.is_pressed();
+        chip8.keyboard[0x6] = Key::E.is_pressed();
+        chip8.keyboard[0x7] = Key::A.is_pressed();
+        chip8.keyboard[0x8] = Key::S.is_pressed();
+        chip8.keyboard[0x9] = Key::D.is_pressed();
+        chip8.keyboard[0xa] = Key::Z.is_pressed();
+        chip8.keyboard[0xb] = Key::C.is_pressed();
+        chip8.keyboard[0xc] = Key::Num4.is_pressed();
+        chip8.keyboard[0xd] = Key::R.is_pressed();
+        chip8.keyboard[0xe] = Key::F.is_pressed();
+        chip8.keyboard[0xf] = Key::V.is_pressed();
+
+        // all the other events
         while let Some(event) = togglebit.poll_event() {
-            use sfml::window::{Event, Key};
             match event {
                 Event::Closed => togglebit.close(),
                 Event::KeyPressed {
                     code: Key::Escape, ..
                 } => togglebit.close(),
-                Event::KeyPressed { code, .. } | Event::KeyReleased { code, .. } => {
-                    let kb_i: usize = match code {
-                        Key::X => 0,
-                        Key::Num1 => 1,
-                        Key::Num2 => 2,
-                        Key::Num3 => 3,
-                        Key::Q => 4,
-                        Key::W => 5,
-                        Key::E => 6,
-                        Key::A => 7,
-                        Key::S => 8,
-                        Key::D => 9,
-                        Key::Z => 10,
-                        Key::C => 11,
-                        Key::Num4 => 12,
-                        Key::R => 13,
-                        Key::F => 14,
-                        Key::V => 15,
-                        _ => 42,
-                    };
-
-                    if kb_i < 16 {
-                        chip8.keyboard[kb_i] = !chip8.keyboard[kb_i];
-                    }
-                }
                 _ => {}
             }
         }

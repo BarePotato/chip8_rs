@@ -1,15 +1,1 @@
 # Write some tests
-	 Make sure your op code bits are doing what we expect
-
-# Connect SFML to Chip8 so we can make noise
-
-# translate the keypad to our keyboard - SFML 
-	X works but not sure what else - WIP
-
-# SFML can handle input, but we will need the "blocking" read tied in to chip8
-
---------
-
-# Vukan rendering pipeline
-
-# Look at Pixels
